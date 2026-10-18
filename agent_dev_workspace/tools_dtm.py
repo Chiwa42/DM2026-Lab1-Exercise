@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
-from typing import List, Optional, Union, Dict, Any
+from typing import List, Optional, Union, Dict, Any, Literal
 from sklearn.feature_extraction.text import CountVectorizer
 from langchain_core.tools import tool
 
@@ -15,6 +15,7 @@ def make_tools(session):
         ngram_range: Optional[List[int]] = None,
         min_df: Union[int, float] = 1,
         max_df: Union[int, float] = 1.0,
+        max_df_mode: Literal["proportion", "count"] = "proportion",
         lowercase: bool = True,
     ) -> Dict[str, Any]:
         """Builds a Document-Term Matrix (DTM) from document text in the session.
@@ -28,8 +29,10 @@ def make_tools(session):
                 lengths to extract. Defaults to [1, 1] (unigrams).
             min_df: Minimum document frequency for vocabulary inclusion (int for absolute count,
                 float for document fraction). Defaults to 1.
-            max_df: Maximum document frequency for vocabulary inclusion (int for absolute count,
-                float for document fraction). Defaults to 1.0.
+            max_df: Maximum document frequency for vocabulary inclusion. Interpreted as float
+                proportion in (0.0, 1.0] when max_df_mode='proportion', or as int count >= 1
+                when max_df_mode='count'. Defaults to 1.0.
+            max_df_mode: Mode for interpreting max_df ('proportion' or 'count'). Defaults to 'proportion'.
             lowercase: Whether to convert text to lowercase before tokenizing. Defaults to True.
 
         Returns:
@@ -55,6 +58,21 @@ def make_tools(session):
             raise ValueError(f"Invalid ngram_range [{min_n}, {max_n}]: lower bound must be >= 1 and <= upper bound.")
 
         ngram_tuple = (min_n, max_n)
+
+        # Unambiguous parsing of max_df via max_df_mode
+        if max_df_mode == "proportion":
+            try:
+                max_df = float(max_df)
+            except (ValueError, TypeError):
+                raise ValueError(f"max_df='{max_df}' cannot be converted to float for proportion mode.")
+            if max_df <= 0.0 or max_df > 1.0:
+                raise ValueError(f"max_df={max_df} out of bounds for proportion mode (must be in (0.0, 1.0]).")
+        elif max_df_mode == "count":
+            if isinstance(max_df, bool) or (isinstance(max_df, float) and not max_df.is_integer()):
+                raise ValueError(f"In 'count' mode, max_df must be an integer count (got {max_df}).")
+            max_df = int(max_df)
+            if max_df < 1:
+                raise ValueError(f"max_df={max_df} out of bounds for count mode (must be >= 1).")
 
         # Handle NaNs / missing text values safely by filling with empty string
         text_data = session.dataframe["text"].fillna("").astype(str)
@@ -98,7 +116,7 @@ def make_tools(session):
             "sparsity_pct": sparsity_pct,
         }
 
-        session.store_result("build_dtm_tool", {"ngram_range": ngram_range, "min_df": min_df, "max_df": max_df, "lowercase": lowercase}, summary)
+        session.store_result("build_dtm_tool", {"ngram_range": ngram_range, "min_df": min_df, "max_df": max_df, "max_df_mode": max_df_mode, "lowercase": lowercase}, summary)
         return summary
 
     @tool

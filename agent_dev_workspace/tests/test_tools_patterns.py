@@ -404,3 +404,34 @@ def test_mine_patterns_tool_empty_vocabulary_and_no_transactions(monkeypatch):
     assert len(full_report_no_trans) == 0
     assert session2.artifacts["patterns_catA_tfidf_fpgrowth"] == []
     assert isinstance(json.dumps(res_no_trans), str)
+
+
+def test_mine_patterns_tool_non_ascii_terms():
+    """Tests that non-ASCII terms are safely encoded for PAMI and mapped back to original strings."""
+    session = SessionState()
+    session.dataframe = pd.DataFrame({
+        "text": ["café résumé", "café résumé"],
+        "category_name": ["catA", "catA"]
+    })
+
+    patterns_tools = make_patterns_tools(session)
+    mine_patterns_tool = next(t for t in patterns_tools if t.name == "mine_patterns_tool")
+
+    res = mine_patterns_tool.invoke({
+        "category_name": "catA",
+        "filtering_method": "tfidf",
+        "algorithm": "fpgrowth",
+        "min_sup": 1
+    })
+
+    assert res["surviving_terms_count"] == 2
+    assert res["pattern_count"] > 0
+
+    all_pattern_items = [item for p in res["patterns"] for item in p["pattern"]]
+
+    # Verify that BOTH original non-ASCII terms appear in the returned patterns
+    assert "café" in all_pattern_items
+    assert "résumé" in all_pattern_items
+
+    # Verify that NO ASCII placeholder identifiers (e.g. item_0, item_1) leak through
+    assert not any(item.startswith("item_") for item in all_pattern_items)

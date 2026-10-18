@@ -147,6 +147,11 @@ def make_tools(session):
             session.store_result("mine_patterns_tool", {"category_name": category_name, "filtering_method": filtering_method, "algorithm": algorithm, "min_sup": min_sup, "k": k}, summary, full_report=full_report)
             return summary
 
+        # Map surviving terms to stable ASCII identifiers for PAMI DF2DB compatibility
+        term_to_id = {term: f"item_{i}" for i, term in enumerate(surviving_terms)}
+        id_to_term = {v: k for k, v in term_to_id.items()}
+        df_trans_ascii = df_trans.rename(columns=term_to_id)
+
         # 4. PAMI mining via temp file
         patterns_list = []
         note = ""
@@ -155,7 +160,7 @@ def make_tools(session):
         os.close(temp_fd)
 
         try:
-            conv = DF2DB.DF2DB(df_trans)
+            conv = DF2DB.DF2DB(df_trans_ascii)
             conv.convert2TransactionalDatabase(temp_path, ">=", 1)
 
             if algorithm == "fpgrowth":
@@ -172,7 +177,9 @@ def make_tools(session):
                 for _, row in patterns_df.iterrows():
                     pat_str = str(row["Patterns"])
                     sup_val = int(row["Support"])
-                    pat_items = sorted(pat_str.strip().split("\t") if "\t" in pat_str else pat_str.strip().split())
+                    raw_items = pat_str.strip().split("\t") if "\t" in pat_str else pat_str.strip().split()
+                    mapped_items = [id_to_term.get(item, item) for item in raw_items]
+                    pat_items = sorted(mapped_items)
                     patterns_list.append({"pattern": pat_items, "support": sup_val})
             else:
                 note = "no patterns found"

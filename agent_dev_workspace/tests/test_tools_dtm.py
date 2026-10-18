@@ -1,6 +1,8 @@
 import json
 import matplotlib.figure
+import pandas as pd
 import pytest
+from pydantic import ValidationError
 from agent_pipeline.session_state import SessionState
 from agent_pipeline.workspace_loader import load_workspace_tools
 from tools_dtm import make_tools
@@ -204,3 +206,60 @@ def test_dtm_heatmap_tool_validation_and_unbuilt():
 
     with pytest.raises(ValueError, match="positive integer"):
         dtm_heatmap_tool.func(n_documents=True)
+
+
+def test_build_dtm_tool_max_df_explicit_mode_and_semantics():
+    """Tests build_dtm_tool with max_df_mode='proportion' vs 'count' and asserts exact vocabulary filtering and schema validation."""
+    session = SessionState()
+    session.dataframe = pd.DataFrame({
+        "text": [
+            "apple banana",   # "apple" in doc 0, 1; "banana" in doc 0, 2
+            "apple cherry",   # "cherry" in doc 1 only
+            "banana dragon",  # "dragon" in doc 2, 3
+            "dragon elder",   # "elder" in doc 3 only
+        ],
+        "category_name": ["catA", "catA", "catB", "catB"]
+    })
+
+    dtm_tools = make_tools(session)
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+
+    # 1. Default mode (max_df_mode omitted with max_df=1.0): proportion 100% (all 5 terms survive)
+    res_default_float = build_dtm_tool.invoke({"max_df": 1.0})
+    vectorizer_default_float = session.artifacts["count_vectorizer"]
+    assert type(vectorizer_default_float.max_df) is float
+    assert vectorizer_default_float.max_df == 1.0
+    assert session.feature_names == ["apple", "banana", "cherry", "dragon", "elder"]
+    assert res_default_float["n_terms"] == 5
+
+    # 2. Default mode (max_df_mode omitted with max_df=1): interprets as float proportion 1.0 (all 5 terms survive)
+    res_default_int = build_dtm_tool.invoke({"max_df": 1})
+    vectorizer_default_int = session.artifacts["count_vectorizer"]
+    assert type(vectorizer_default_int.max_df) is float
+    assert vectorizer_default_int.max_df == 1.0
+    assert session.feature_names == ["apple", "banana", "cherry", "dragon", "elder"]
+    assert res_default_int["n_terms"] == 5
+
+    # 3. Explicit max_df_mode="proportion": max_df=1 -> proportion 1.0 (all 5 terms survive)
+    res_prop = build_dtm_tool.invoke({"max_df": 1, "max_df_mode": "proportion"})
+    vectorizer_prop = session.artifacts["count_vectorizer"]
+    assert type(vectorizer_prop.max_df) is float
+    assert vectorizer_prop.max_df == 1.0
+    assert session.feature_names == ["apple", "banana", "cherry", "dragon", "elder"]
+    assert res_prop["n_terms"] == 5
+
+    # 4. Explicit max_df_mode="count": max_df=1 -> int count <= 1 doc (only 'cherry' and 'elder' survive)
+    res_count = build_dtm_tool.invoke({"max_df": 1, "max_df_mode": "count"})
+    vectorizer_count = session.artifacts["count_vectorizer"]
+    assert type(vectorizer_count.max_df) is int
+    assert vectorizer_count.max_df == 1
+    assert session.feature_names == ["cherry", "elder"]
+    assert res_count["n_terms"] == 2
+
+    # 5. Non-integer in count mode raises ValueError
+    with pytest.raises(ValueError, match="must be an integer count"):
+        build_dtm_tool.invoke({"max_df": 1.5, "max_df_mode": "count"})
+
+    # 6. Invalid max_df_mode string rejected at schema boundary with pydantic ValidationError
+    with pytest.raises(ValidationError, match="proportion|count"):
+        build_dtm_tool.invoke({"max_df": 1, "max_df_mode": "invalid_mode"})
